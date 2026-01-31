@@ -1,0 +1,7 @@
+generated_skill/
+sklill zip contents example/
+.trae/
+AI-Skill-Generator/
+__pycache__/
+*.zip
+*.pyc

@@ -87,6 +87,12 @@ def main():
         value="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
         help="User Agent string to identify the scraper."
     )
+    
+    st.sidebar.markdown("---")
+    st.sidebar.header("Skill Details")
+    skill_name = st.sidebar.text_input("Skill Name", value="generated-skill", help="Name of the skill in the YAML frontmatter.")
+    skill_description = st.sidebar.text_input("Description", value="AI Skill generated from website documentation.", help="Description of the skill.")
+    skill_overview = st.sidebar.text_area("Overview", value="This skill contains documentation scraped from the provided website.", help="Detailed overview text in the skill documentation.")
 
     # Main Area
     if "zip_path" not in st.session_state:
@@ -125,7 +131,10 @@ def main():
             max_threads=threads,
             user_agent=user_agent,
             max_pages=max_pages,
-            max_retries=max_retries
+            max_retries=max_retries,
+            skill_name=skill_name,
+            skill_description=skill_description,
+            skill_overview=skill_overview
         )
         
         def update_progress(msg, progress):

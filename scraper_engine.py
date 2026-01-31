@@ -27,6 +27,9 @@ class ScraperConfig:
     user_agent: str = "Mozilla/5.0"
     max_pages: int = 100 # Safety limit for recursive mode
     max_retries: int = 3 # New: Max retries for requests
+    skill_name: str = "generated-skill"
+    skill_description: str = "AI Skill generated from website documentation."
+    skill_overview: str = "This skill contains documentation scraped from the provided website."
 
 class ScraperEngine:
     def __init__(self, config: ScraperConfig, progress_callback: Optional[Callable[[str, float], None]] = None):
@@ -173,15 +176,15 @@ class ScraperEngine:
 
     def generate_skill_md(self, scraped_data: List[dict]):
         """Generate the SKILL.md file."""
-        skill_content = """---
-name: generated-skill
-description: AI Skill generated from website documentation.
+        skill_content = f"""---
+name: {self.config.skill_name}
+description: {self.config.skill_description}
 ---
 
 # Documentation
 
 ## Overview
-This skill contains documentation scraped from the provided website.
+{self.config.skill_overview}
 
 ## Reference File Index
 

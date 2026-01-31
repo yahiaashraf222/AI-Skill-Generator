@@ -13,6 +13,9 @@ import logging
 from dataclasses import dataclass
 from typing import List, Callable, Optional, Set
 
+import json
+from dataclasses import dataclass, asdict
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -49,12 +52,42 @@ class ScraperEngine:
         self.session.mount("https://", adapter)
         self.session.mount("http://", adapter)
         
-        self.output_dir = "generated_skill"
+        # Determine output directory based on skill name
+        self.skill_folder_name = self._slugify(self.config.skill_name)
+        # Use a timestamp if name is default or empty to ensure some uniqueness/history tracking? 
+        # User asked for "auto separate by site name", so skill name is the best proxy.
+        # To avoid overwriting same skill name if run multiple times, maybe we should NOT append timestamp unless requested.
+        # But for "history", separate folders are better. 
+        # Let's append a short timestamp to guarantee uniqueness for history tracking.
+        timestamp = time.strftime("%Y%m%d-%H%M%S")
+        self.output_base = "generated_skills"
+        self.unique_folder_name = f"{self.skill_folder_name}-{timestamp}"
+        self.output_dir = os.path.join(self.output_base, self.unique_folder_name)
         self.references_dir = os.path.join(self.output_dir, "references")
+        
+        self._ensure_directories()
+        
+        # Setup File Logging
+        self.log_file = os.path.join(self.output_dir, "crawl.log")
+        file_handler = logging.FileHandler(self.log_file, encoding='utf-8')
+        file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        logger.addHandler(file_handler)
         
     def _ensure_directories(self):
         if not os.path.exists(self.references_dir):
             os.makedirs(self.references_dir)
+
+    def save_metadata(self, results: List[dict]):
+        """Save configuration and crawl results for future reference."""
+        # Save Config
+        config_path = os.path.join(self.output_dir, "config.json")
+        with open(config_path, 'w', encoding='utf-8') as f:
+            json.dump(asdict(self.config), f, indent=4)
+            
+        # Save Crawl Data
+        data_path = os.path.join(self.output_dir, "crawl_data.json")
+        with open(data_path, 'w', encoding='utf-8') as f:
+            json.dump(results, f, indent=4)
 
     def _slugify(self, text: str) -> str:
         """Convert text to a valid filename."""
@@ -215,13 +248,16 @@ Install this skill into your AI agent or editor.
 
     def create_zip(self) -> str:
         """Zip the generated content and return the path to the zip file."""
-        zip_filename = "skill_bundle.zip"
-        zip_path = os.path.join(os.getcwd(), zip_filename)
+        # Zip file inside the skill folder
+        zip_filename = f"{self.skill_folder_name}.zip"
+        zip_path = os.path.join(self.output_dir, zip_filename)
         
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
             # Add SKILL.md and README.md
-            zipf.write(os.path.join(self.output_dir, "SKILL.md"), "SKILL.md")
-            zipf.write(os.path.join(self.output_dir, "README.md"), "README.md")
+            if os.path.exists(os.path.join(self.output_dir, "SKILL.md")):
+                zipf.write(os.path.join(self.output_dir, "SKILL.md"), "SKILL.md")
+            if os.path.exists(os.path.join(self.output_dir, "README.md")):
+                zipf.write(os.path.join(self.output_dir, "README.md"), "README.md")
             
             # Add reference files
             for root, dirs, files in os.walk(self.references_dir):
@@ -234,121 +270,112 @@ Install this skill into your AI agent or editor.
 
     def run(self):
         """Main execution method."""
-        self._ensure_directories()
+        # self._ensure_directories() # Already called in __init__
         
         results = []
         visited_urls = set()
         pending_urls = set()
 
-        # Initial Population
-        if self.config.mode == "sitemap":
-            initial_urls = self.fetch_sitemap_urls()
-            for url in initial_urls:
-                pending_urls.add(url)
-        elif self.config.mode == "recursive":
-            if not self.config.base_url:
-                raise ValueError("Base URL is required for recursive mode.")
-            pending_urls.add(self.config.base_url)
-        
-        total_urls_estimate = len(pending_urls) if self.config.mode == "sitemap" else "Unknown"
-        completed_count = 0
-        
-        with ThreadPoolExecutor(max_workers=self.config.max_threads) as executor:
-            # Map future to URL
-            future_to_url = {}
+        try:
+            # Initial Population
+            if self.config.mode == "sitemap":
+                initial_urls = self.fetch_sitemap_urls()
+                for url in initial_urls:
+                    pending_urls.add(url)
+            elif self.config.mode == "recursive":
+                if not self.config.base_url:
+                    raise ValueError("Base URL is required for recursive mode.")
+                pending_urls.add(self.config.base_url)
             
-            # Submit initial batch
-            while pending_urls and (self.config.mode == "sitemap" or completed_count + len(future_to_url) < self.config.max_pages):
-                # If sitemap, submit all. If recursive, limit by max_pages.
-                
-                # Careful not to submit too many at once if recursive to allow discovery?
-                # Actually, standard pool usage is fine.
-                
-                # We need to drain pending_urls and move them to visited/future
-                
-                # Take a snapshot of pending to iterate safely
-                to_submit = list(pending_urls)
-                pending_urls.clear() # Clear pending as we are submitting them
-                
-                for url in to_submit:
-                    if url not in visited_urls:
-                        visited_urls.add(url)
-                        future = executor.submit(self.process_url, url)
-                        future_to_url[future] = url
-
-            # Process Loop
-            while future_to_url:
-                # Wait for at least one future to complete
-                done, not_done = wait(future_to_url.keys(), return_when=FIRST_COMPLETED)
-                
-                for future in done:
-                    url = future_to_url.pop(future)
-                    try:
-                        data = future.result()
-                        results.append(data)
-                        
-                        # Handle Recursive Discovery
-                        if self.config.mode == "recursive" and data['status'] == 'success':
-                            new_links = data.get('extracted_links', [])
-                            for link in new_links:
-                                if link not in visited_urls:
-                                    pending_urls.add(link)
-                                    
-                    except Exception as exc:
-                        logger.error(f"{url} generated an exception: {exc}")
-                    
-                    completed_count += 1
-                    
-                    if self.progress_callback:
-                        # Estimate progress: if sitemap, we know total. If recursive, it's open ended until max.
-                        if self.config.mode == "sitemap":
-                            progress = min(completed_count / total_urls_estimate, 1.0)
-                            msg = f"Processed {completed_count}/{total_urls_estimate}"
-                        else:
-                            # For recursive, progress is arbitrary or based on max_pages
-                            progress = min(completed_count / self.config.max_pages, 1.0)
-                            msg = f"Processed {completed_count} (Limit: {self.config.max_pages})"
-                            
-                        self.progress_callback(msg, progress)
-
-                # Submit new pending URLs if we haven't reached limits
-                if self.config.mode == "recursive":
-                    # Check limit
-                    current_active = len(future_to_url)
-                    slots_available = self.config.max_pages - (completed_count + current_active)
-                    
-                    if slots_available > 0 and pending_urls:
-                        # Take up to slots_available from pending
-                        batch = []
-                        while pending_urls and len(batch) < slots_available:
-                            batch.append(pending_urls.pop())
-                            
-                        for next_url in batch:
-                            if next_url not in visited_urls: # Double check
-                                visited_urls.add(next_url)
-                                future = executor.submit(self.process_url, next_url)
-                                future_to_url[future] = next_url
-                    
-                    # If no futures running and no pending urls, we are done
-                    if not future_to_url and not pending_urls:
-                        break
-                        
-                elif self.config.mode == "sitemap":
-                    # In sitemap mode, we submitted everything at start (usually), unless sitemap was huge?
-                    # My initial logic submitted all pending. So if pending is empty and futures are done, we break.
-                    pass
-
-        # 3. Generate Metadata files
-        if self.progress_callback:
-            self.progress_callback("Generating index files...", 1.0)
+            total_urls_estimate = len(pending_urls) if self.config.mode == "sitemap" else "Unknown"
+            completed_count = 0
             
-        self.generate_skill_md(results)
-        self.generate_readme()
-        
-        # 4. Create Zip
-        zip_path = self.create_zip()
-        
-        return zip_path, results
+            with ThreadPoolExecutor(max_workers=self.config.max_threads) as executor:
+                # Map future to URL
+                future_to_url = {}
+                
+                # Submit initial batch
+                while pending_urls and (self.config.mode == "sitemap" or completed_count + len(future_to_url) < self.config.max_pages):
+                    # If sitemap, submit all. If recursive, limit by max_pages.
+                    
+                    # Careful not to submit too many at once if recursive to allow discovery?
+                    # Actually, standard pool usage is fine.
+                    
+                    # We need to drain pending_urls and move them to visited/future
+                    
+                    # Take a snapshot of pending to iterate safely
+                    to_submit = list(pending_urls)
+                    pending_urls.clear() # Clear pending as we are submitting them
+                    
+                    for url in to_submit:
+                        if url not in visited_urls:
+                            visited_urls.add(url)
+                            future = executor.submit(self.process_url, url)
+                            future_to_url[future] = url
+
+                # Process Loop
+                while future_to_url:
+                    # Wait for at least one future to complete
+                    done, not_done = wait(future_to_url.keys(), return_when=FIRST_COMPLETED)
+                    
+                    for future in done:
+                        url = future_to_url.pop(future)
+                        try:
+                            data = future.result()
+                            results.append(data)
+                            completed_count += 1
+                            
+                            # Update Progress
+                            if self.progress_callback:
+                                if isinstance(total_urls_estimate, int) and total_urls_estimate > 0:
+                                    progress = min(1.0, completed_count / total_urls_estimate)
+                                    self.progress_callback(f"Processed {completed_count}/{total_urls_estimate} (Pending: {len(pending_urls)})", progress)
+                                else:
+                                    self.progress_callback(f"Processed {completed_count} (Pending: {len(pending_urls)})", 0.5)
+
+                            # Handle Recursive Discovery
+                            if self.config.mode == "recursive" and data['status'] == 'success':
+                                new_links = data.get('extracted_links', [])
+                                for link in new_links:
+                                    if link not in visited_urls:
+                                        pending_urls.add(link)
+                                        
+                        except Exception as exc:
+                            logger.error(f"{url} generated an exception: {exc}")
+                        
+                    # Refill Queue if recursive
+                    if self.config.mode == "recursive":
+                         while pending_urls and completed_count + len(future_to_url) < self.config.max_pages:
+                             # Pull from pending
+                             # To avoid submitting all at once again, let's take chunks or just loop
+                             # Since we are inside the loop, just take what we can
+                             
+                             # NOTE: pending_urls is a set, so popping might be random.
+                             # Let's convert to list to slice if needed, or just iterate
+                             to_add = []
+                             while pending_urls and len(future_to_url) + len(to_add) < self.config.max_threads * 2: # Keep buffer full
+                                 to_add.append(pending_urls.pop())
+                             
+                             for url in to_add:
+                                if url not in visited_urls:
+                                    visited_urls.add(url)
+                                    future = executor.submit(self.process_url, url)
+                                    future_to_url[future] = url
+                             
+                             if not to_add:
+                                 break
+
+            # Generate Output Files
+            self.generate_skill_md(results)
+            self.generate_readme()
+            self.save_metadata(results)
+            zip_path = self.create_zip()
+            
+            return zip_path, results
+
+        except Exception as e:
+            logger.error(f"Fatal error in run: {e}")
+            raise
 
 if __name__ == "__main__":
     pass

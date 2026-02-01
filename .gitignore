@@ -3,3 +3,5 @@ generated_skills/
 __pycache__/
 *.zip
 *.pyc
+.trae/
+crawl.log

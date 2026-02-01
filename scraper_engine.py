@@ -69,10 +69,16 @@ class ScraperEngine:
         
         # Setup File Logging
         self.log_file = os.path.join(self.output_dir, "crawl.log")
-        file_handler = logging.FileHandler(self.log_file, encoding='utf-8')
-        file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-        logger.addHandler(file_handler)
+        self.file_handler = logging.FileHandler(self.log_file, encoding='utf-8')
+        self.file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        logger.addHandler(self.file_handler)
         
+    def _cleanup_logging(self):
+        """Close and remove the file handler."""
+        if hasattr(self, 'file_handler'):
+            self.file_handler.close()
+            logger.removeHandler(self.file_handler)
+
     def _ensure_directories(self):
         if not os.path.exists(self.references_dir):
             os.makedirs(self.references_dir)
@@ -289,6 +295,7 @@ Install this skill into your AI agent or editor.
             
             total_urls_estimate = len(pending_urls) if self.config.mode == "sitemap" else "Unknown"
             completed_count = 0
+            last_update_time = 0
             
             with ThreadPoolExecutor(max_workers=self.config.max_threads) as executor:
                 # Map future to URL
@@ -325,8 +332,10 @@ Install this skill into your AI agent or editor.
                             results.append(data)
                             completed_count += 1
                             
-                            # Update Progress
-                            if self.progress_callback:
+                            # Update Progress (Throttled to max 10 updates per second)
+                            current_time = time.time()
+                            if self.progress_callback and (current_time - last_update_time > 0.1):
+                                last_update_time = current_time
                                 if isinstance(total_urls_estimate, int) and total_urls_estimate > 0:
                                     progress = min(1.0, completed_count / total_urls_estimate)
                                     self.progress_callback(f"Processed {completed_count}/{total_urls_estimate} (Pending: {len(pending_urls)})", progress)
@@ -376,6 +385,8 @@ Install this skill into your AI agent or editor.
         except Exception as e:
             logger.error(f"Fatal error in run: {e}")
             raise
+        finally:
+            self._cleanup_logging()
 
 if __name__ == "__main__":
     pass

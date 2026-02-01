@@ -13,16 +13,9 @@ st.set_page_config(
     layout="wide"
 )
 
-def reset_environment():
-    """Clean up generated files."""
-    if os.path.exists("generated_skill"):
-        shutil.rmtree("generated_skill")
-    if os.path.exists("skill_bundle.zip"):
-        os.remove("skill_bundle.zip")
-
-def load_config_into_session(config_data):
-    """Load configuration dictionary into session state."""
-    # Mapping keys to sidebar keys
+# --- CONFIG LOADING LOGIC (MUST BE AT TOP) ---
+if 'pending_config_load' in st.session_state:
+    config_data = st.session_state.pop('pending_config_load')
     st.session_state.skill_name_input = config_data.get('skill_name', '')
     st.session_state.skill_description_input = config_data.get('skill_description', '')
     st.session_state.skill_overview_input = config_data.get('skill_overview', '')
@@ -35,6 +28,19 @@ def load_config_into_session(config_data):
     st.session_state.max_retries_input = config_data.get('max_retries', 3)
     st.session_state.user_agent_input = config_data.get('user_agent', '')
     st.toast("Configuration loaded! Switch to Generator tab to run.")
+# ---------------------------------------------
+
+def reset_environment():
+    """Clean up generated files."""
+    if os.path.exists("generated_skill"):
+        shutil.rmtree("generated_skill")
+    if os.path.exists("skill_bundle.zip"):
+        os.remove("skill_bundle.zip")
+
+def load_config_into_session(config_data):
+    """Load configuration dictionary into session state."""
+    st.session_state['pending_config_load'] = config_data
+    st.rerun()
 
 def get_url_tree(crawl_data):
     """Build a directory tree structure from crawl data URLs."""
